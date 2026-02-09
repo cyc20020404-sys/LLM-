@@ -1,0 +1,30 @@
+# 大模型与权重（自行训练或下载后放置）
+*.gguf
+*.safetensors
+lora_model/
+merged_model/
+outputs/
+
+# 缓存与编译
+unsloth_compiled_cache/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+.eggs/
+
+# 环境与本地配置
+.env
+.venv/
+venv/
+
+# llama.cpp 子项目（体积大，可单独 clone）
+llama.cpp/
+
+# Jupyter / 临时
+.ipynb_checkpoints/
+
+# 系统与 IDE
+.DS_Store
+*.swp
+*.swo
