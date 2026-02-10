@@ -34,20 +34,64 @@ LOCAL_GGUF_FILES = [
 LOCAL_MODEL_DIRS = [
     os.path.join(_APP_DIR, "merged_model"),
 ]
+# DPO 微调模型：直接加载 LoRA 适配器（基础模型 + adapter，无需合并）
+LOCAL_DPO_MODEL_DIR = os.path.join(_APP_DIR, "lora_model_dpo")
 
-# 三套语气提示词：小孩 / 年轻人 / 老年人
+# 语气提示词：需与 DPO 人设（小团团、活泼温柔）兼容，避免指令冲突导致乱讲
 TONE_PROMPTS = {
-    "小孩": "【当前对话对象：小朋友】请用对小孩说话的方式回答：用词简单、句子短，语气温暖耐心、带一点鼓励和趣味，避免复杂概念，可以适当用叠词或拟声词，让对话更亲切可爱。",
+    "无提示词": "",
+    "小孩": "【小团团对小朋友】用词简单、句子短，语气温暖耐心，可偶尔用叠词增加趣味，但回答要清晰完整、不要堆砌拟声词。",
     "年轻人": "【当前对话对象：年轻人】请用轻松、自然、像朋友聊天的语气回答：直接不啰嗦，可以带一点日常或网络用语，保持友好和共鸣，像同龄人一样交流。",
-    "老年人": "【当前对话对象：长辈/老年人】请用尊敬、耐心、体贴的方式回答：把话说清楚、语速放慢的感觉，多用敬语和关心，避免网络用语和复杂概念，让对方感到被尊重和照顾。",
+    "老年人": "【小团团对长辈】保持尊敬体贴，把话说清楚，多用敬语，少用网络用语和emoji，让对方感到被尊重。语气仍保持温暖，但更稳重。",
 }
 
 
 def _build_chat_prompt(user_input: str) -> str:
-    """根据当前选择的语气风格，拼接带语气指令的对话 prompt。"""
+    """GGUF 等使用：User/Assistant 简单格式。"""
     tone = st.session_state.get("tone_style", "年轻人")
-    instruction = TONE_PROMPTS.get(tone, TONE_PROMPTS["年轻人"])
-    return f"{instruction}\n\nUser: {user_input}\nAssistant:"
+    instruction = TONE_PROMPTS.get(tone, "")
+    if instruction:
+        return f"{instruction}\n\nUser: {user_input}\nAssistant:"
+    return f"User: {user_input}\nAssistant:"
+
+
+# 语气来源说明：
+# - 模型（DPO 权重）：从 chosen/rejected 对中学到「活泼温柔 vs 官方生硬」的偏好
+# - Prompt（下文人设）：与训练时的 system 一致，提供上下文，使模型知道当前是「小团团」场景
+# 二者缺一不可：无 prompt 则模型不知人设，无 DPO 则模型无该偏好。实际语气 = 两者共同作用。
+DPO_SYSTEM_PROMPT = (
+    "你是小团团，一个活泼温柔、像朋友一样聊天的AI助手。"
+    "请用轻松自然的语气回答，可带emoji和网络用语，避免官方、生硬、模板化的表达。"
+)
+
+def _build_hf_prompt(user_input: str, tokenizer) -> str:
+    """
+    HF/DPO 模型专用：使用与 DPO 训练相同的 chat_template 和 system 人设，
+    否则模型在推理时看到的格式与训练不一致，无法正确输出活泼语气。
+    """
+    tone = st.session_state.get("tone_style", "年轻人")
+    instruction = TONE_PROMPTS.get(tone, "")
+    is_dpo = st.session_state.get("current_model") == "DPO微调模型"
+
+    # DPO 模型：必须注入训练时的人设；有语气选项时与人设合并
+    if is_dpo:
+        system_content = DPO_SYSTEM_PROMPT
+        if instruction:
+            system_content = f"{DPO_SYSTEM_PROMPT}\n\n{instruction}"
+        messages = [{"role": "system", "content": system_content}, {"role": "user", "content": user_input}]
+    elif instruction:
+        messages = [{"role": "system", "content": instruction}, {"role": "user", "content": user_input}]
+    else:
+        messages = [{"role": "user", "content": user_input}]
+    try:
+        prompt = tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True,
+        )
+        return prompt
+    except Exception:
+        return _build_chat_prompt(user_input)
 
 
 # 加载模型（须在侧边栏“预加载模型”按钮之前定义）
@@ -124,6 +168,29 @@ def load_model(model_type):
                 st.error("❌ 未找到可用的本地模型（GGUF 文件或 merged_model 等目录）。")
                 return None, None, None
 
+            if model_type == "DPO微调模型":
+                path = LOCAL_DPO_MODEL_DIR
+                if not os.path.isdir(path):
+                    _log(f"DPO 模型目录不存在: {path}")
+                    st.error(f"❌ DPO 模型目录不存在：{path}\n请先运行 `python train_dpo.py` 完成 DPO 训练。")
+                    return None, None, None
+                _log(f"尝试加载 DPO 模型（基础模型 + LoRA 适配器）: {path}")
+                try:
+                    from unsloth import FastLanguageModel
+                    model, tokenizer = FastLanguageModel.from_pretrained(
+                        path,
+                        max_seq_length=max_seq_length,
+                        load_in_4bit=True,  # 与训练时基座一致，节省显存
+                    )
+                    model = FastLanguageModel.for_inference(model)
+                    _log(f"DPO 模型加载成功: {path}")
+                    st.success(f"✅ DPO 微调模型加载成功：{path}")
+                    return model, tokenizer, "hf"
+                except Exception as e:
+                    _log(f"DPO 模型加载失败: {e}")
+                    st.error(f"❌ DPO 模型加载失败: {str(e)}")
+                    return None, None, None
+
             # 基础模型：从 HuggingFace 加载（需 GPU + Unsloth）
             _log("加载基础模型（HuggingFace）...")
             try:
@@ -192,10 +259,10 @@ with st.sidebar:
     # 语气风格（对话对象）：小孩 / 年轻人 / 老年人
     tone_style = st.selectbox(
         "语气风格（对话对象）",
-        options=["小孩", "年轻人", "老年人"],
-        index=1,
+        options=["无提示词", "小孩", "年轻人", "老年人"],
+        index=0,
         key="tone_style",
-        help="选择对话对象后，小团团会用对应语气回答（用词与风格会随之调整）",
+        help="「无提示词」= 不加任何语气指令，查看模型原始效果；其余选项会注入对应语气提示词。",
     )
     
     # PyTorch 是否可见 GPU（基础模型依赖 PyTorch；GGUF 用 llama-cpp-python 的 CUDA，二者独立）
@@ -208,11 +275,14 @@ with st.sidebar:
     # 模型选择
     model_choice = st.selectbox(
         "选择模型加载方式",
-        ["本地微调模型", "基础模型"],
-        help="基础模型需 GPU；无 GPU 时请选「本地微调模型」并加载 GGUF。",
+        ["本地微调模型", "DPO微调模型", "基础模型"],
+        help="本地微调模型=SFT训练产出；DPO微调模型=DPO训练产出（解决重复/截断问题）；基础模型=原始预训练。",
     )
     if model_choice == "基础模型":
         st.caption("⚠️ 需 PyTorch 能见 GPU，否则会加载失败")
+    elif model_choice == "DPO微调模型":
+        _dpo_exists = os.path.isdir(LOCAL_DPO_MODEL_DIR)
+        st.caption(f"{'✅' if _dpo_exists else '❌'} lora_model_dpo/ {'已就绪' if _dpo_exists else '不存在，请先运行 train_dpo.py'}")
     
     # 生成参数配置
     col1, col2 = st.columns(2)
@@ -326,13 +396,13 @@ def stream_gguf_response(user_input, placeholder, max_tok, temp, top_p_val):
 
 
 def stream_hf_response(user_input, placeholder, max_tok, temp, top_p_val):
-    """HF 基础模型流式生成，边生成边更新 placeholder，只显示 </think> 后的回答。"""
+    """HF 模型流式生成，使用 chat_template 与训练格式一致，只显示 </think> 后的回答。"""
     if st.session_state.model is None or st.session_state.tokenizer is None:
         placeholder.markdown("❌ 模型未加载或状态异常")
         return "❌ 模型未加载"
     try:
         from transformers import TextIteratorStreamer
-        prompt = _build_chat_prompt(user_input)
+        prompt = _build_hf_prompt(user_input, st.session_state.tokenizer)
         device = "cuda" if torch.cuda.is_available() else "cpu"
         inputs = st.session_state.tokenizer(
             prompt, return_tensors="pt", truncation=True, max_length=4096
@@ -346,6 +416,7 @@ def stream_hf_response(user_input, placeholder, max_tok, temp, top_p_val):
             temperature=temp,
             top_p=top_p_val,
             do_sample=True,
+            repetition_penalty=1.15,  # 抑制呀呀呀、抱抱抱等重复
             pad_token_id=st.session_state.tokenizer.pad_token_id,
             eos_token_id=st.session_state.tokenizer.eos_token_id,
             streamer=streamer,
@@ -375,7 +446,8 @@ def generate_response(user_input):
     backend = st.session_state.get("backend", "hf")
 
     try:
-        prompt = _build_chat_prompt(user_input)
+        prompt = (_build_hf_prompt(user_input, st.session_state.tokenizer)
+                  if st.session_state.tokenizer else _build_chat_prompt(user_input))
 
         if backend == "gguf":
             # GGUF 使用流式在外部调用，此处仅作非流式兜底（一般不走到）
@@ -395,28 +467,30 @@ def generate_response(user_input):
                 response = _strip_think_tags(response)
                 return response or "（无输出）"
 
-        # HF 后端
+        # HF 后端：只解码新生成部分，并去除 <think> 内容
         if st.session_state.tokenizer is None:
             return "❌ 模型状态异常"
-        inputs = st.session_state.tokenizer.encode(
-            prompt, return_tensors="pt"
-        ).to("cuda" if torch.cuda.is_available() else "cpu")
+        enc = st.session_state.tokenizer(prompt, return_tensors="pt")
+        input_len = enc["input_ids"].shape[1]
+        enc = {k: v.to("cuda" if torch.cuda.is_available() else "cpu") for k, v in enc.items()}
         with torch.no_grad():
             outputs = st.session_state.model.generate(
-                inputs,
+                **enc,
                 max_new_tokens=max_tokens,
                 temperature=temperature,
                 top_p=top_p,
                 do_sample=True,
+                repetition_penalty=1.15,
                 pad_token_id=st.session_state.tokenizer.pad_token_id,
                 eos_token_id=st.session_state.tokenizer.eos_token_id,
             )
         response = st.session_state.tokenizer.decode(
-            outputs[0], skip_special_tokens=True
+            outputs[0][input_len:], skip_special_tokens=True
         )
+        response = _strip_think_tags(response)
         if "Assistant:" in response:
             response = response.split("Assistant:")[-1].strip()
-        return response
+        return response.strip() or "（无输出）"
     except Exception as e:
         return f"❌ 生成失败: {str(e)}"
 
