@@ -2,6 +2,11 @@ import os
 # 关键：彻底禁用容易报错的加速插件，改用稳定的下载模式
 os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
 os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "0"
+
+# 若 HuggingFace 无法访问或下载超时，则强制走 ModelScope
+# 需要先在终端安装：pip install modelscope
+os.environ["UNSLOTH_USE_MODELSCOPE"] = "1"
+
 # 若下载/训练太慢，可先在终端开启加速再运行本脚本：
 #   source /etc/network_turbo && export HF_ENDPOINT=https://hf-mirror.com
 #   python train.py 
@@ -57,9 +62,8 @@ def formatting_prompts_func(examples):
 # 2. 数据集配置：可配置多个 json/jsonl 文件，会合并后用于训练
 _script_dir = os.path.dirname(os.path.abspath(__file__))
 DATA_FILES = [
-    "train.jsonl",           # 主训练集
-    # "train_extra.jsonl",   # 可追加更多文件
-    # "data/emotion_qa.jsonl",
+    "data_conv/train.jsonl",           # 主训练集
+    # "data_conv/train_extra.jsonl",   # 可追加更多文件
 ]
 
 

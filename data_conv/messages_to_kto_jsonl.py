@@ -179,8 +179,8 @@ def convert_file(in_path: str, out_path: str, include_system: bool = False) -> i
 
 def main():
     ap = argparse.ArgumentParser(description="messages jsonl → KTO prompt/completion/label jsonl")
-    ap.add_argument("input", nargs="?", default="train.jsonl", help="输入 messages jsonl 路径")
-    ap.add_argument("-o", "--output", default="train_kto.jsonl", help="输出 KTO jsonl 路径")
+    ap.add_argument("input", nargs="?", default="data_conv/train.jsonl", help="输入 messages jsonl 路径")
+    ap.add_argument("-o", "--output", default="data_conv/train_kto.jsonl", help="输出 KTO jsonl 路径")
     ap.add_argument("--include-system", action="store_true", help="将 system 加入 prompt")
     ap.add_argument("--merge", action="store_true", help="合并项目内多个 train.jsonl 再输出")
     args = ap.parse_args()
@@ -189,17 +189,17 @@ def main():
     root_dir = os.path.dirname(script_dir)
 
     if args.merge:
-        inputs = [os.path.join(root_dir, "train.jsonl")]
+        inputs = [os.path.join(script_dir, "train.jsonl")]
         extra = [
-            os.path.join(root_dir, "data_conv", "datagirl_train.jsonl"),
-            os.path.join(root_dir, "data_conv", "music", "train.jsonl"),
-            os.path.join(root_dir, "data_conv", "film", "train.jsonl"),
-            os.path.join(root_dir, "data_conv", "travel", "train.jsonl"),
+            os.path.join(script_dir, "datagirl_train.jsonl"),
+            os.path.join(script_dir, "music", "train.jsonl"),
+            os.path.join(script_dir, "film", "train.jsonl"),
+            os.path.join(script_dir, "travel", "train.jsonl"),
         ]
         for p in extra:
             if os.path.isfile(p):
                 inputs.append(p)
-        out_path = os.path.join(root_dir, args.output)
+        out_path = os.path.join(script_dir, args.output) if not os.path.isabs(args.output) else args.output
         total = 0
         seen = set()
         with open(out_path, "w", encoding="utf-8") as f_out:

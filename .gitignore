@@ -9,7 +9,10 @@ outputs/
 outputs_dpo/
 
 # 大型合并数据集（由脚本生成，无需版本管理）
-train_dpo_merged.jsonl
+data_conv/train_dpo_merged.jsonl
+
+# RAG 向量索引缓存
+rag_index/
 
 # 缓存与编译
 unsloth_compiled_cache/
@@ -32,5 +35,6 @@ llama.cpp/
 
 # 系统与 IDE
 .DS_Store
+.idea/
 *.swp
 *.swo

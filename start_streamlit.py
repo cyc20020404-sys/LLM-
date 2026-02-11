@@ -27,14 +27,37 @@ def main():
     print(f"📂 工作目录: {os.getcwd()}")
     print()
     
-    # 1. 安装依赖
+    # 1. 安装依赖（基础 + RAG + ModelScope）
     print("📦 安装依赖...")
     print("-" * 60)
     try:
         subprocess.run(
-            [sys.executable, "-m", "pip", "install", "-q",
-             "streamlit", "torch", "transformers", "datasets", "peft"],
-            check=True
+            [
+                sys.executable,
+                "-m",
+                "pip",
+                "install",
+                "-q",
+                # 基础依赖
+                "streamlit",
+                "torch",
+                "transformers",
+                "datasets",
+                "peft",
+                # RAG 依赖
+                "langchain",
+                "langchain-huggingface",
+                "langchain-community",
+                "langchain-text-splitters",
+                "faiss-cpu",
+                "rank-bm25",
+                "sentence-transformers",
+                "pymupdf",
+                "docx2txt",
+                # Unsloth 使用 ModelScope 下载模型时需要
+                "modelscope",
+            ],
+            check=True,
         )
         print("✓ 依赖安装完成")
     except subprocess.CalledProcessError as e:

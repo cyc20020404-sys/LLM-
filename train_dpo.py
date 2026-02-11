@@ -2,6 +2,11 @@ import os
 # 关键：彻底禁用容易报错的加速插件，改用稳定的下载模式
 os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
 os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "0"
+
+# 若 HuggingFace 无法访问或下载超时，则强制走 ModelScope
+# 需要先在终端安装：pip install modelscope
+os.environ["UNSLOTH_USE_MODELSCOPE"] = "1"
+
 # 若下载/训练太慢，可先在终端开启加速再运行本脚本：
 #   source /etc/network_turbo && export HF_ENDPOINT=https://hf-mirror.com
 #   python train_dpo.py
@@ -48,7 +53,7 @@ model = FastLanguageModel.get_peft_model(
 )
 
 # ── 4. 加载 DPO 数据集 ──────────────────────────────────────────
-DPO_DATA_FILE = "train_dpo.jsonl"
+DPO_DATA_FILE = os.path.join("data_conv", "train_dpo.jsonl")
 
 _data_path = os.path.join(_script_dir, DPO_DATA_FILE)
 if not os.path.isfile(_data_path):
@@ -166,4 +171,9 @@ _lora_dir = os.path.join(_script_dir, "lora_model_dpo")
 model.save_pretrained(_lora_dir)
 tokenizer.save_pretrained(_lora_dir)
 print(f"DPO LoRA 适配器已保存到 {_lora_dir}")
-print("Streamlit 可直接从 lora_model_dpo 加载（基础模型 + LoRA），无需合并步骤。")
+
+# 另外导出「已合并权重」版本，Streamlit 可直接离线加载，无需再访问 HuggingFace/ModelScope
+_merged_dir = os.path.join(_script_dir, "merged_model_dpo")
+model = FastLanguageModel.for_inference(model)
+model.save_pretrained_merged(_merged_dir, tokenizer, save_method="merged_16bit")
+print(f"DPO 合并后完整参数已保存到 {_merged_dir}（推理推荐使用该目录，完全本地、无需联网）。")
