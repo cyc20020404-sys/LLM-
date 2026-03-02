@@ -23,8 +23,8 @@ from transformers import TrainerCallback, TrainerControl, TrainerState
 # ── 2. 模型与参数 ────────────────────────────────────────────────
 _script_dir = os.path.dirname(os.path.abspath(__file__))
 
-# 直接基于预训练基座做 DPO（之前 SFT/LoRA 效果不佳，不再使用 merged_model）
-model_name = "unsloth/deepseek-r1-distill-qwen-7b-unsloth-bnb-4bit"
+# 直接基于预训练基座做 DPO（试验分支 feat/qwen2-2b-base：Qwen2 2B 基座）
+model_name = "Qwen/Qwen2-2B-Instruct"
 print(f"使用预训练基座做 DPO: {model_name}")
 
 max_seq_length = 2048  # DPO 需要同时编码 chosen + rejected，适当缩短

@@ -485,7 +485,7 @@ def load_model(model_type):
             _log("加载基础模型（HuggingFace）...")
             try:
                 from unsloth import FastLanguageModel
-                model_name = "unsloth/deepseek-r1-distill-qwen-7b-unsloth-bnb-4bit"
+                model_name = "Qwen/Qwen2-2B-Instruct"  # 分支 feat/qwen2-2b-base
                 model, tokenizer = FastLanguageModel.from_pretrained(
                     model_name=model_name,
                     max_seq_length=max_seq_length,
@@ -1040,7 +1040,7 @@ if user_input:
 st.markdown("---")
 st.markdown("""
 <div style='text-align: center'>
-    <small>🚀 驱动模型: DeepSeek R1 Distill Qwen 7B</small>
+    <small>🚀 驱动模型: Qwen2 2B Instruct（分支 feat/qwen2-2b-base）</small>
     <br>
     <small>⚡ 框架: Unsloth + Streamlit</small>
 </div>
