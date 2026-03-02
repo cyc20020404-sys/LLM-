@@ -5,7 +5,7 @@ os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "0"
 
 # 若 HuggingFace 无法访问或下载超时，则强制走 ModelScope
 # 需要先在终端安装：pip install modelscope
-os.environ["UNSLOTH_USE_MODELSCOPE"] = "1"
+os.environ["UNSLOTH_USE_MODELSCOPE"] = "1"111
 
 # 若下载/训练太慢，可先在终端开启加速再运行本脚本：
 #   source /etc/network_turbo && export HF_ENDPOINT=https://hf-mirror.com
