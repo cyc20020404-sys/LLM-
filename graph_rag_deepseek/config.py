@@ -46,7 +46,16 @@ class GraphRAGConfig:
     def __post_init__(self):
         # 允许通过环境变量覆盖
         if os.getenv("NEO4J_URI"):
-            self.neo4j_uri = os.getenv("NEO4J_URI")
+            uri = os.getenv("NEO4J_URI").strip()
+            # 单机直连必须用 bolt/bolt+s；neo4j/neo4j+s 会请求集群路由导致 "Unable to retrieve routing information"
+            if uri.startswith("neo4j://"):
+                uri = "bolt://" + uri[8:]
+            elif uri.startswith("neo4j+s://"):
+                uri = "bolt+s://" + uri[10:]
+            # 经 SSH 隧道连本机时用明文 bolt，否则易出现 SSLEOFError / Exec format error
+            if "127.0.0.1" in uri or "localhost" in uri:
+                uri = uri.replace("bolt+s://", "bolt://", 1)
+            self.neo4j_uri = uri
         if os.getenv("NEO4J_PASSWORD"):
             self.neo4j_password = os.getenv("NEO4J_PASSWORD")
         if os.getenv("MILVUS_HOST"):

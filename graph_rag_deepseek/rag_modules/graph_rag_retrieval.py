@@ -79,9 +79,13 @@ class GraphRAGRetrieval:
         
         # 连接Neo4j
         try:
+            # 连接Neo4j（经 SSH 隧道：长超时 + 单连接池）
             self.driver = GraphDatabase.driver(
                 self.config.neo4j_uri, 
-                auth=(self.config.neo4j_user, self.config.neo4j_password)
+                auth=(self.config.neo4j_user, self.config.neo4j_password),
+                connection_timeout=180.0,
+                connection_acquisition_timeout=180.0,
+                max_connection_pool_size=1,
             )
             # 测试连接
             with self.driver.session() as session:

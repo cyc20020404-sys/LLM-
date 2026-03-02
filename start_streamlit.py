@@ -10,6 +10,11 @@ import subprocess
 import sys
 
 def main():
+    # 排除本地地址不走代理（network_turbo 会把 127.0.0.1 也转发，导致 Neo4j Bolt incomplete handshake）
+    os.environ["no_proxy"] = "localhost,127.0.0.1,.local"
+    if "NO_PROXY" not in os.environ:
+        os.environ["NO_PROXY"] = os.environ["no_proxy"]
+
     # 优先使用系统 libstdc++，避免 Conda 下 llama-cpp-python 报 GLIBCXX_3.4.30 not found
     system_lib = "/usr/lib/x86_64-linux-gnu"
     if os.path.isdir(system_lib):
@@ -94,18 +99,34 @@ def main():
     print("🚀 启动 Streamlit 应用...")
     print("=" * 60)
     print()
+    # 8501 若被占用则依次尝试 8502, 8503
+    import socket
+    def _port_free(p):
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            s.bind(("", p))
+            return True
+        except OSError:
+            return False
+        finally:
+            s.close()
+    port = 8501
+    for p in (8501, 8502, 8503):
+        if _port_free(p):
+            port = p
+            break
     print("📡 访问地址:")
-    print("   - 本地: http://localhost:8501")
-    print("   - 远程: http://[服务器IP]:8501")
+    print(f"   - 本地: http://localhost:{port}")
+    print(f"   - 远程: http://[服务器IP]:{port}")
     print()
     print("按 Ctrl+C 停止应用")
     print("-" * 60)
     print()
-    
+
     try:
         subprocess.run(
             [sys.executable, "-m", "streamlit", "run", "streamlit_app.py",
-             "--server.port", "8501",
+             "--server.port", str(port),
              "--server.address", "0.0.0.0",
              "--logger.level", "error"],
             check=True

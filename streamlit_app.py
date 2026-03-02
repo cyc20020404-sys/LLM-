@@ -1,5 +1,12 @@
 import os
 
+# 排除本地地址不走代理（network_turbo 会把 127.0.0.1 也转发到代理，导致 Neo4j Bolt 握手 incomplete handshake）
+_prev_np = os.environ.get("no_proxy", "")
+if "127.0.0.1" not in _prev_np and "localhost" not in _prev_np:
+    os.environ["no_proxy"] = "localhost,127.0.0.1,.local" + ("," + _prev_np if _prev_np else "")
+if "NO_PROXY" not in os.environ:
+    os.environ["NO_PROXY"] = os.environ.get("no_proxy", "")
+
 # 必须在任何会触发 HuggingFace 下载的 import 之前设置，否则 RAG 嵌入模型 BAAI/bge-small-zh-v1.5 会直连 huggingface.co 报错
 os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
 os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "0"
@@ -40,21 +47,29 @@ from rag_modules import (
     format_context,
 )
 
+# 意图识别：按用户意图改写 prompt，不消耗 LLM Token
+try:
+    from intent_classifier import predict_intent
+    _INTENT_AVAILABLE = True
+except Exception:
+    _INTENT_AVAILABLE = False
+
 def _log(msg):
     """输出到终端，便于在无浏览器日志时排查"""
     print(f"[streamlit 模型] {msg}", flush=True)
 
 # Unsloth 仅在加载 HF 模型时按需导入（需 GPU）；使用 GGUF 时不导入，避免无 GPU 环境报错
 
-# 本地微调模型：优先 GGUF 单文件，其次为 HF 格式目录（_APP_DIR 已在上方定义）
+# Gold SFT 微调模型：train.py 训练 gold_data_sft.jsonl 后保存到 merged_model，会覆盖原模型
+# 优先 GGUF 单文件，其次为 HF 格式目录 merged_model（_APP_DIR 已在上方定义）
 # RAG 知识库与索引目录
 KNOWLEDGE_DIR = os.path.join(_APP_DIR, "knowledge_base")
 RAG_INDEX_DIR = os.path.join(_APP_DIR, "rag_index")
-# GGUF 单文件（可配置多个 .gguf 路径，按顺序尝试）
+# GGUF 单文件（可配置多个 .gguf 路径，按顺序尝试；若从 gold 模型导出 GGUF 可放此处）
 LOCAL_GGUF_FILES = [
     os.path.join(_APP_DIR, "my_emotional_bot.Q4_K_M.gguf"),
 ]
-# HF 格式目录（合并后的 safetensors 等）
+# HF 格式目录：train.py 的 merged_model 输出（gold SFT 训练后即为此目录）
 LOCAL_MODEL_DIRS = [
     os.path.join(_APP_DIR, "merged_model"),
 ]
@@ -72,7 +87,7 @@ MAIN_MODULE_RAG = "RAG"
 MAIN_MODULE_AGENT = "AGENT (敬请期待)"
 MAIN_MODULES = [MAIN_MODULE_EMOTION, MAIN_MODULE_RAG, MAIN_MODULE_AGENT]
 # 情感机器人下的模型选项（不含图RAG）
-EMOTION_MODELS = ["本地微调模型", "DPO微调模型", "基础模型"]
+EMOTION_MODELS = ["Gold SFT微调模型", "DPO微调模型", "基础模型"]
 
 # 语气提示词：需与 DPO 人设（小团团、活泼温柔）兼容，避免指令冲突导致乱讲
 TONE_PROMPTS = {
@@ -82,11 +97,55 @@ TONE_PROMPTS = {
     "老年人": "【小团团对长辈】保持尊敬体贴，把话说清楚，多用敬语，少用网络用语和emoji，让对方感到被尊重。语气仍保持温暖，但更稳重。",
 }
 
+# 意图识别后的 prompt 增强（置信度 >= 阈值 且 非「轻松闲聊」时注入）
+# 兜底策略：置信度 < 0.6 或 意图=轻松闲聊 时，不注入意图提示，使用默认人设
+INTENT_PROMPTS = {
+    "吐槽抱怨": "【用户可能在吐槽发泄】请用幽默共情的方式接梗，陪ta一起吐槽，别讲大道理。",
+    "分享喜悦": "【用户很开心地在分享】请热情回应、一起开心，多用语气词和emoji。",
+    "恋爱情感": "【用户涉及恋爱/暗恋】请温柔倾听、给出温暖建议，别judge，多抱抱。",
+    "追星娱乐": "【用户在聊追星】请理解并一起嗨，别泼冷水。",
+    "职场学业": "【用户在说工作/学习压力】请给鼓励和接地气的建议，少灌鸡汤。",
+    "美食生活": "【用户在聊吃的】轻松聊聊，可以接梗或分享同感。",
+    "求助安慰": "【用户需要安慰】请多抱抱、多共情、少说教，让ta感到被接住。",
+    # "轻松闲聊" 不注入，走兜底
+}
+INTENT_CONFIDENCE_THRESHOLD = 0.6  # 低于此值视为分类不可靠，走兜底
+
+
+def _get_intent_prompt(user_input: str) -> tuple[str, str]:
+    """
+    基于意图识别获取增强 prompt。兜底：未启用/模型不可用/置信度低/轻松闲聊 时返回空。
+    Returns:
+        (intent_prompt, detected_intent)  # intent_prompt 为空时表示走兜底
+    """
+    _preview = (user_input[:40] + "…") if len(user_input) > 40 else user_input
+    if not st.session_state.get("intent_enabled", True):
+        _log(f"[意图] 已关闭 | 输入: {_preview}")
+        return "", ""
+    if not _INTENT_AVAILABLE or not user_input.strip():
+        _log(f"[意图] 模型不可用或输入为空 | 输入: {_preview}")
+        return "", ""
+    try:
+        intent, conf = predict_intent(user_input)
+        inject = conf >= INTENT_CONFIDENCE_THRESHOLD and intent != "轻松闲聊"
+        if inject:
+            _log(f"[意图] ✅ {intent} ({conf:.2f}) → 已注入 | 输入: {_preview}")
+        else:
+            reason = "轻松闲聊" if intent == "轻松闲聊" else f"置信度低({conf:.2f}<{INTENT_CONFIDENCE_THRESHOLD})"
+            _log(f"[意图] ⚠️ {intent} ({conf:.2f}) → 兜底({reason}) | 输入: {_preview}")
+        if inject:
+            return INTENT_PROMPTS.get(intent, ""), intent
+        return "", intent
+    except Exception as e:
+        _log(f"[意图] 识别失败走兜底: {e} | 输入: {_preview}")
+        return "", ""
+
 
 def _build_chat_prompt(user_input: str, rag_context: str | None = None) -> str:
-    """GGUF 等使用：User/Assistant 简单格式，可选注入 RAG 上下文。"""
+    """GGUF 等使用：User/Assistant 简单格式，可选注入 RAG 上下文 + 意图增强。"""
     tone = st.session_state.get("tone_style", "年轻人")
     instruction = TONE_PROMPTS.get(tone, "")
+    intent_prompt, _ = _get_intent_prompt(user_input)
     ctx_block = ""
     if rag_context:
         ctx_block = (
@@ -95,9 +154,8 @@ def _build_chat_prompt(user_input: str, rag_context: str | None = None) -> str:
             f"{rag_context}\n"
             "---\n\n"
         )
-    system_part = ""
-    if instruction or ctx_block:
-        system_part = f"{instruction}\n\n{ctx_block}" if instruction else ctx_block
+    parts = [p for p in (instruction, intent_prompt, ctx_block) if p]
+    system_part = "\n\n".join(parts) if parts else ""
     prefix = f"{system_part}User: " if system_part else "User: "
     return f"{prefix}{user_input}\nAssistant:"
 
@@ -110,15 +168,22 @@ DPO_SYSTEM_PROMPT = (
     "你是小团团，一个活泼温柔、像朋友一样聊天的AI助手。"
     "请用轻松自然的语气回答，可带emoji和网络用语，避免官方、生硬、模板化的表达。"
 )
+# Gold SFT 训练时使用的人设（与 data_conv/gold_to_sft.py 一致）
+GOLD_SFT_SYSTEM_PROMPT = (
+    "你是小团团，一个活泼温柔、像朋友一样聊天的AI助手。请用轻松自然的语气回答，可带emoji和网络用语。"
+)
 
 def _build_hf_prompt(user_input: str, tokenizer) -> str:
     """
     HF/DPO 模型专用：使用与 DPO 训练相同的 chat_template 和 system 人设，
     否则模型在推理时看到的格式与训练不一致，无法正确输出活泼语气。
+    根据意图识别结果注入增强 prompt，置信度低或轻松闲聊时走兜底。
     """
     tone = st.session_state.get("tone_style", "年轻人")
     instruction = TONE_PROMPTS.get(tone, "")
+    intent_prompt, _ = _get_intent_prompt(user_input)
     is_dpo = st.session_state.get("current_model") == "DPO微调模型"
+    is_gold_sft = st.session_state.get("current_model") == "Gold SFT微调模型"
 
     # 若启用 RAG，先检索知识并构建上下文块
     rag_ctx = ""
@@ -141,18 +206,35 @@ def _build_hf_prompt(user_input: str, tokenizer) -> str:
             "---\n\n"
         )
 
-    # DPO 模型：必须注入训练时的人设；有语气选项时与人设合并，再追加 RAG 块
+    # 意图增强块（兜底时 intent_prompt 为空）
+    intent_block = f"\n\n{intent_prompt}" if intent_prompt else ""
+
+    # DPO 模型：必须注入训练时的人设；有语气/意图/RAG 时与人设合并
     if is_dpo:
         system_content = DPO_SYSTEM_PROMPT
         if instruction:
             system_content = f"{DPO_SYSTEM_PROMPT}\n\n{instruction}"
+        if intent_block:
+            system_content = f"{system_content}{intent_block}"
         if rag_block:
             system_content = f"{system_content}\n\n{rag_block}"
         messages = [{"role": "system", "content": system_content}, {"role": "user", "content": user_input}]
-    elif instruction or rag_block:
+    # Gold SFT 模型：注入训练时的小团团人设（与 gold_to_sft.py 一致）
+    elif is_gold_sft:
+        system_content = GOLD_SFT_SYSTEM_PROMPT
+        if instruction:
+            system_content = f"{GOLD_SFT_SYSTEM_PROMPT}\n\n{instruction}"
+        if intent_block:
+            system_content = f"{system_content}{intent_block}"
+        if rag_block:
+            system_content = f"{system_content}\n\n{rag_block}"
+        messages = [{"role": "system", "content": system_content}, {"role": "user", "content": user_input}]
+    elif instruction or intent_prompt or rag_block:
         system_parts = []
         if instruction:
             system_parts.append(instruction)
+        if intent_prompt:
+            system_parts.append(intent_prompt)
         if rag_block:
             system_parts.append(rag_block)
         system_content = "\n\n".join(system_parts)
@@ -219,8 +301,8 @@ def init_rag():
         return None
 
 
-def _check_port(host: str, port: int, timeout: float = 2.0) -> bool:
-    """快速检测 TCP 端口是否可达（用于判断隧道/服务是否就绪）"""
+def _check_port(host: str, port: int, timeout: float = 8.0) -> bool:
+    """检测 TCP 端口是否可达（隧道下可能稍慢，给 8s）"""
     import socket
     try:
         with socket.create_connection((host, port), timeout=timeout):
@@ -253,16 +335,15 @@ def init_graph_rag():
     _neo4j_port = int(_neo4j_m.group(2)) if _neo4j_m else 7687
 
     _missing = []
-    if not _check_port(_neo4j_host, _neo4j_port):
+    if not _check_port(_neo4j_host, _neo4j_port, timeout=15):
         _missing.append(f"Neo4j ({_neo4j_host}:{_neo4j_port})")
-    if not _check_port(DEFAULT_CONFIG.milvus_host, DEFAULT_CONFIG.milvus_port):
+    if not _check_port(DEFAULT_CONFIG.milvus_host, DEFAULT_CONFIG.milvus_port, timeout=15):
         _missing.append(f"Milvus ({DEFAULT_CONFIG.milvus_host}:{DEFAULT_CONFIG.milvus_port})")
 
     if _missing:
-        _log(f"⚠️ 以下服务不可达，请检查 Docker 容器或 SSH 隧道是否正常: {', '.join(_missing)}")
-        return None
+        _log(f"⚠️ 预检: {', '.join(_missing)} 不可达，仍尝试初始化。若持续失败，请在本机 Windows 建立 SSH 反向隧道：ssh -p <端口> -R 7687:127.0.0.1:7687 -R 19530:127.0.0.1:19530 root@<连接地址>")
 
-    # ── 端口可达，正式初始化 ──
+    # ── 尝试初始化（预检失败也继续，因 init 内有重试）──
     try:
         from graph_rag_deepseek.main import AdvancedGraphRAGSystem
         _log("正在初始化图 RAG 系统（Neo4j + Milvus + DeepSeek）...")
@@ -281,12 +362,12 @@ def init_graph_rag():
 # 加载模型（须在侧边栏“预加载模型”按钮之前定义）
 @st.cache_resource
 def load_model(model_type):
-    """加载模型。本地微调：优先 GGUF 单文件，否则 HF 目录；不加载基础模型。"""
+    """加载模型。Gold SFT：优先 GGUF 单文件，否则 HF merged_model 目录；不加载基础模型。"""
     max_seq_length = 4096
     _log(f"开始加载模型，类型: {model_type}")
     with st.spinner("🔄 正在加载模型，请稍候..."):
         try:
-            if model_type == "本地微调模型":
+            if model_type == "Gold SFT微调模型":
                 # 1) 优先：GGUF 单文件
                 for path in LOCAL_GGUF_FILES:
                     if not os.path.isfile(path):
@@ -313,7 +394,7 @@ def load_model(model_type):
                                 st.warning("⚠️ 当前为 **CPU 版** llama-cpp-python，推理时 GPU 会显示 0%、CPU 满负载很慢。请安装 CUDA 版后重启应用，见 README「让 GGUF 使用 5090 显卡」。")
                         except Exception:
                             pass
-                        st.success(f"✅ 本地 GGUF 模型加载成功：{path}")
+                        st.success(f"✅ Gold SFT GGUF 模型加载成功：{path}")
                         return llm, None, "gguf"
                     except ImportError as e:
                         _log(f"ImportError: {e}")
@@ -342,14 +423,14 @@ def load_model(model_type):
                         )
                         model = FastLanguageModel.for_inference(model)
                         _log(f"HF 加载成功: {path}")
-                        st.success(f"✅ 本地微调模型加载成功：{path}")
+                        st.success(f"✅ Gold SFT 微调模型加载成功：{path}")
                         return model, tokenizer, "hf"
                     except Exception as e:
                         _log(f"HF 加载失败 {path}: {e}")
                         st.warning(f"⚠️ {path} 加载失败: {str(e)}")
                         continue
-                _log("未找到可用的本地模型")
-                st.error("❌ 未找到可用的本地模型（GGUF 文件或 merged_model 等目录）。")
+                _log("未找到可用的 Gold SFT 模型")
+                st.error("❌ 未找到可用的 Gold SFT 模型（GGUF 文件或 merged_model 目录）。请先运行 python train.py 完成 gold 数据微调。")
                 return None, None, None
 
             if model_type == "DPO微调模型":
@@ -475,6 +556,8 @@ if "backend" not in st.session_state:
     st.session_state.backend = "hf"
 if "graph_rag_system" not in st.session_state:
     st.session_state.graph_rag_system = None
+if "intent_enabled" not in st.session_state:
+    st.session_state.intent_enabled = True
 
 # 主区标题与状态条（按模块切换）
 _main_module = st.session_state.get("main_module", MAIN_MODULE_EMOTION)
@@ -511,11 +594,20 @@ with st.sidebar:
             "选择模型",
             EMOTION_MODELS,
             key="emotion_model_choice",
-            help="本地微调 / DPO / 基础模型。",
+            help="Gold SFT 微调（merged_model）/ DPO / 基础模型。",
         )
         st.caption(f"📌 **{st.session_state.load_status}**")
         if model_choice == "基础模型":
             st.caption("⚠️ 需 PyTorch 能见 GPU，否则会加载失败")
+        elif model_choice == "Gold SFT微调模型":
+            _gold_exists = (
+                any(os.path.isfile(p) for p in LOCAL_GGUF_FILES)
+                or any(os.path.isdir(p) for p in LOCAL_MODEL_DIRS)
+            )
+            st.caption(
+                f"{'✅' if _gold_exists else '❌'} Gold SFT 模型 "
+                f"{'已就绪（merged_model 或 GGUF）' if _gold_exists else '未找到，请先运行 python train.py'}"
+            )
         elif model_choice == "DPO微调模型":
             _dpo_exists = os.path.isdir(LOCAL_DPO_MERGED_DIR) or os.path.isdir(LOCAL_DPO_LORA_DIR)
             st.caption(
@@ -542,6 +634,16 @@ with st.sidebar:
                 key="tone_style",
                 help="无提示词 = 不加语气指令；其余会注入对应提示词。",
             )
+            intent_enabled = st.checkbox(
+                "启用意图识别",
+                value=True,
+                help="根据用户输入自动识别意图并增强 prompt；置信度低时自动兜底。",
+                key="intent_enabled",
+            )
+            if intent_enabled and _INTENT_AVAILABLE:
+                st.caption("✅ 意图模型已加载")
+            elif intent_enabled and not _INTENT_AVAILABLE:
+                st.caption("⚠️ 意图模型未就绪，请运行 intent_classifier/train_intent.py")
             rag_enabled = st.checkbox(
                 "启用 RAG 知识检索",
                 value=False,
@@ -617,6 +719,8 @@ with st.sidebar:
     with st.expander("🔧 调试信息", expanded=False):
         st.caption(f"📂 项目目录: `{_APP_DIR}`")
         st.caption(f"🕸️ 图RAG 目录: {'✅ 存在' if os.path.isdir(GRAPH_RAG_DIR) else '❌ 不存在'}")
+        _intent_on = st.session_state.get("intent_enabled", True)
+        st.caption(f"🎯 意图识别: {'已启用' if _intent_on else '已关闭'} | 模型: {'✅ 就绪' if _INTENT_AVAILABLE else '❌ 未训练'}")
         _cuda_ok = torch.cuda.is_available()
         _cuda_msg = f"是（{torch.cuda.get_device_name(0)}）" if _cuda_ok else "否"
         st.caption(f"PyTorch 可见 GPU: **{_cuda_msg}**")

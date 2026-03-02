@@ -93,6 +93,12 @@ emention_bot/graph_rag_deepseek/
 
 ## 常见问题
 
+- **SSH 隧道方向（必读）**：Neo4j 在本机（如 Windows）时，要让远程（AutoDL）访问本机 Neo4j，必须用 **反向隧道**，且方向不能反。应在 **本机（Neo4j 所在机器）** 执行 `ssh -R`，把 **远程** 的 7687 转发到 **本机** 7687；不能在本机用 `-L` 把本机端口转到远程，也不能在远程执行“转发到本机”的命令（远程通常无法 SSH 回你本机）。正确示例（在本机执行）：
+  ```bash
+  ssh -o Compression=no -p <端口> -R 7687:127.0.0.1:7687 -R 19530:127.0.0.1:19530 root@<AutoDL连接地址>
+  ```
+  保持该终端不关，再在 AutoDL 上连接 `127.0.0.1:7687` 即可。
+- **Neo4j Bolt "incomplete handshake response" / Bolt 握手超时**：先确认隧道方向正确（见上）。若方向无误仍失败：① 本机先 `python test_neo4j_bolt.py --local` 确认 Neo4j 正常；② 隧道加 `-o Compression=no`；③ 若仍失败，改用 **Neo4j Aura Free**（云托管）：在 [neo4j.com/cloud](https://neo4j.com/cloud) 创建免费实例，设置 `NEO4J_URI=neo4j+s://xxx.databases.neo4j.io` 和 `NEO4J_PASSWORD`，无需隧道。
 - **连接 Milvus 失败**：确认 `docker compose up -d` 后 Milvus 健康（如 `docker compose ps`），再等约 30 秒后重试。
 - **Neo4j 导入失败**：确认 `data/cypher/` 下存在 `nodes.csv`、`relationships.csv`、`neo4j_import.cypher`，且 neo4j-init 容器已执行完成（可查看 `docker compose logs neo4j-init`）。
 - **DeepSeek 报错**：检查 `.env` 中 `DEEPSEEK_API_KEY` 是否正确、网络是否可访问 `api.deepseek.com`。

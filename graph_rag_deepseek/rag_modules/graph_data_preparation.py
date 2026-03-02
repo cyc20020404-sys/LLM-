@@ -2,12 +2,20 @@
 图数据库数据准备模块
 """
 
+# 在 import neo4j 前强制清除代理，避免 Bolt 流量被劫持导致 incomplete handshake
+import os
+os.environ["no_proxy"] = os.environ.get("no_proxy", "") + ",localhost,127.0.0.1,.local"
+for _p in ("http_proxy", "https_proxy", "all_proxy", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"):
+    os.environ.pop(_p, None)
+
 import logging
 import json
+import time
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
 
 from neo4j import GraphDatabase
+from neo4j.exceptions import ServiceUnavailable
 from langchain_core.documents import Document
 
 logger = logging.getLogger(__name__)
@@ -55,27 +63,47 @@ class GraphDataPreparationModule:
         self._connect()
     
     def _connect(self):
-        """建立Neo4j连接（带超时，避免隧道未就绪时长时间阻塞）"""
-        try:
-            self.driver = GraphDatabase.driver(
-                self.uri, 
-                auth=(self.user, self.password),
-                database=self.database,
-                connection_timeout=5,          # 连接超时 5 秒
-                max_transaction_retry_time=5,  # 重试上限 5 秒
-            )
-            logger.info(f"已连接到Neo4j数据库: {self.uri}")
-            
-            # 测试连接
-            with self.driver.session() as session:
-                result = session.run("RETURN 1 as test")
-                test_result = result.single()
-                if test_result:
-                    logger.info("Neo4j连接测试成功")
-                    
-        except Exception as e:
-            logger.error(f"连接Neo4j失败（请检查 Docker 容器或 SSH 隧道是否正常）: {e}")
-            raise
+        """建立Neo4j连接（经 SSH 隧道：多轮重试、长超时、单连接；不做 TCP 预热以免干扰 Bolt）
+        若 Neo4j 服务端要求 TLS，请设置 NEO4J_URI=neo4j+s://host:port，否则使用 bolt://。
+        """
+        last_err = None
+        connection_timeout = 180.0
+        connection_acquisition_timeout = 180.0
+        max_attempts = 5
+        backoff = [3, 6, 12, 20, 30]  # 秒，重试间隔拉长给隧道稳定时间
+
+        for attempt in range(max_attempts):
+            if attempt > 0:
+                wait = backoff[attempt - 1] if (attempt - 1) < len(backoff) else backoff[-1]
+                logger.warning(f"Neo4j 连接尝试 {attempt}/{max_attempts} 失败，{wait}s 后重试: {last_err}")
+                time.sleep(wait)
+            try:
+                # 驱动使用系统 socket，不传代理；代理已在本模块顶部通过环境变量清除
+                self.driver = GraphDatabase.driver(
+                    self.uri,
+                    auth=(self.user, self.password),
+                    database=self.database,
+                    connection_timeout=connection_timeout,
+                    connection_acquisition_timeout=connection_acquisition_timeout,
+                    max_connection_pool_size=1,
+                    max_transaction_retry_time=30,
+                )
+                with self.driver.session() as session:
+                    result = session.run("RETURN 1 as test")
+                    if result.single():
+                        logger.info("Neo4j连接测试成功")
+                logger.info(f"已连接到Neo4j数据库: {self.uri}")
+                return
+            except (ServiceUnavailable, TimeoutError, OSError) as e:
+                last_err = e
+                if self.driver:
+                    try:
+                        self.driver.close()
+                    except Exception:
+                        pass
+                    self.driver = None
+        logger.error(f"连接Neo4j失败（请检查 Docker 与 SSH 隧道）: {last_err}")
+        raise last_err
     
     def close(self):
         """关闭数据库连接"""
@@ -85,13 +113,26 @@ class GraphDataPreparationModule:
     
     def load_graph_data(self) -> Dict[str, Any]:
         """
-        从Neo4j加载图数据
-        
-        Returns:
-            包含节点和关系的数据字典
+        从Neo4j加载图数据（经隧道时偶发超时，失败则重试一次）
         """
         logger.info("正在从Neo4j加载图数据...")
-        
+        last_err = None
+        for attempt in range(2):
+            try:
+                return self._load_graph_data_impl()
+            except (ServiceUnavailable, TimeoutError, OSError) as e:
+                last_err = e
+                if attempt == 0:
+                    logger.warning(f"加载图数据超时/断开，5 秒后重试: {e}")
+                    time.sleep(5)
+                else:
+                    raise
+        if last_err:
+            raise last_err
+        return {}
+
+    def _load_graph_data_impl(self) -> Dict[str, Any]:
+        """实际执行从 Neo4j 加载图数据。"""
         with self.driver.session() as session:
             # 加载所有菜谱节点，从Category关系中读取分类信息
             recipes_query = """

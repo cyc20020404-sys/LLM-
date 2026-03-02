@@ -38,3 +38,7 @@ llama.cpp/
 .idea/
 *.swp
 *.swo
+.cursor/
+
+# 意图识别训练好的模型（体积大，需自行训练）
+intent_classifier/intent_model/

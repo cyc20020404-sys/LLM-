@@ -3,6 +3,12 @@
 """
 
 import os
+
+# 经 SSH 隧道连 Neo4j/Milvus 时，避免代理劫持 127.0.0.1 导致 Bolt "incomplete handshake"
+os.environ["no_proxy"] = os.environ.get("no_proxy", "") + ",localhost,127.0.0.1,.local"
+for k in ("http_proxy", "https_proxy", "all_proxy", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"):
+    os.environ.pop(k, None)
+
 import sys
 import time
 import logging

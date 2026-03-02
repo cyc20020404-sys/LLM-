@@ -13,6 +13,7 @@ services:
     environment:
       NEO4J_AUTH: neo4j/all-in-rag
       NEO4J_dbms_connector_bolt_advertised__address: localhost:7687
+      NEO4J_dbms_connector_bolt_tls__level: OPTIONAL  # 经隧道时 TLS 易超时，允许纯 bolt:// 连接
       NEO4J_dbms_security_allow__csv__import__from__file__urls: "true"
       NEO4J_dbms_directories_import: "/import"
       NEO4J_PLUGINS: '["apoc"]'
