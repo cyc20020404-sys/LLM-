@@ -17,8 +17,8 @@ from trl import SFTTrainer
 from transformers import TrainingArguments
 from datasets import load_dataset
 
-# 1. 模型与参数（分支 feat/qwen2-2b-base：Qwen2 2B，效果不好可切回 main）
-model_name = "Qwen/Qwen2-2B-Instruct"
+# 1. 模型与参数（DeepSeek-R1-Distill-Qwen 7B）
+model_name = "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"
 max_seq_length = 4096
 
 # 2. 加载模型

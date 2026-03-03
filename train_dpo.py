@@ -3,9 +3,8 @@ import os
 os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
 os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "0"
 
-# 若 HuggingFace 无法访问或下载超时，则强制走 ModelScope
-# 需要先在终端安装：pip install modelscope
-os.environ["UNSLOTH_USE_MODELSCOPE"] = "1"
+# Qwen 系列在 ModelScope 不存在，必须用 HuggingFace（HF 镜像）
+os.environ["UNSLOTH_USE_MODELSCOPE"] = "0"
 
 # 若下载/训练太慢，可先在终端开启加速再运行本脚本：
 #   source /etc/network_turbo && export HF_ENDPOINT=https://hf-mirror.com
@@ -23,8 +22,8 @@ from transformers import TrainerCallback, TrainerControl, TrainerState
 # ── 2. 模型与参数 ────────────────────────────────────────────────
 _script_dir = os.path.dirname(os.path.abspath(__file__))
 
-# 直接基于预训练基座做 DPO（试验分支 feat/qwen2-2b-base：Qwen2 2B 基座）
-model_name = "Qwen/Qwen2-2B-Instruct"
+# 直接基于预训练基座做 DPO（DeepSeek-R1-Distill-Qwen 7B）
+model_name = "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"
 print(f"使用预训练基座做 DPO: {model_name}")
 
 max_seq_length = 2048  # DPO 需要同时编码 chosen + rejected，适当缩短
@@ -53,7 +52,7 @@ model = FastLanguageModel.get_peft_model(
 )
 
 # ── 4. 加载 DPO 数据集 ──────────────────────────────────────────
-# 可选：train_dpo.jsonl（原始）或 gold_train_dpo.jsonl（gold 数据转 DPO，约 2000 条）
+# 使用 gold 数据转 DPO 格式（约 2000 条，chosen=活泼温柔 vs rejected=官方生硬）
 DPO_DATA_FILE = os.path.join("data_conv", "data", "gold_train_dpo.jsonl")
 
 _data_path = os.path.join(_script_dir, DPO_DATA_FILE)

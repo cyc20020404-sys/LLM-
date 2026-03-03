@@ -73,7 +73,7 @@ LOCAL_GGUF_FILES = [
 LOCAL_MODEL_DIRS = [
     os.path.join(_APP_DIR, "merged_model"),
 ]
-# DPO 微调模型：
+# Gold DPO 微调模型：使用 data_conv/data/gold_train_dpo.jsonl（gold 数据 chosen vs 官方生硬 rejected）训练
 # - 优先：merged_model_dpo（已合并权重，完全离线加载）
 # - 备选：lora_model_dpo（LoRA 适配器，需要本地已有基座模型或可联网）
 LOCAL_DPO_MERGED_DIR = os.path.join(_APP_DIR, "merged_model_dpo")
@@ -87,7 +87,7 @@ MAIN_MODULE_RAG = "RAG"
 MAIN_MODULE_AGENT = "AGENT (敬请期待)"
 MAIN_MODULES = [MAIN_MODULE_EMOTION, MAIN_MODULE_RAG, MAIN_MODULE_AGENT]
 # 情感机器人下的模型选项（不含图RAG）
-EMOTION_MODELS = ["Gold SFT微调模型", "DPO微调模型", "基础模型"]
+EMOTION_MODELS = ["Gold SFT微调模型", "Gold DPO微调模型", "基础模型"]
 
 # 语气提示词：需与 DPO 人设（小团团、活泼温柔）兼容，避免指令冲突导致乱讲
 TONE_PROMPTS = {
@@ -161,7 +161,7 @@ def _build_chat_prompt(user_input: str, rag_context: str | None = None) -> str:
 
 
 # 语气来源说明：
-# - 模型（DPO 权重）：从 chosen/rejected 对中学到「活泼温柔 vs 官方生硬」的偏好
+# - 模型（Gold DPO 权重）：从 gold 数据的 chosen/rejected 对中学到「活泼温柔 vs 官方生硬」的偏好
 # - Prompt（下文人设）：与训练时的 system 一致，提供上下文，使模型知道当前是「小团团」场景
 # 二者缺一不可：无 prompt 则模型不知人设，无 DPO 则模型无该偏好。实际语气 = 两者共同作用。
 DPO_SYSTEM_PROMPT = (
@@ -182,7 +182,7 @@ def _build_hf_prompt(user_input: str, tokenizer) -> str:
     tone = st.session_state.get("tone_style", "年轻人")
     instruction = TONE_PROMPTS.get(tone, "")
     intent_prompt, _ = _get_intent_prompt(user_input)
-    is_dpo = st.session_state.get("current_model") == "DPO微调模型"
+    is_dpo = st.session_state.get("current_model") == "Gold DPO微调模型"
     is_gold_sft = st.session_state.get("current_model") == "Gold SFT微调模型"
 
     # 若启用 RAG，先检索知识并构建上下文块
@@ -433,7 +433,7 @@ def load_model(model_type):
                 st.error("❌ 未找到可用的 Gold SFT 模型（GGUF 文件或 merged_model 目录）。请先运行 python train.py 完成 gold 数据微调。")
                 return None, None, None
 
-            if model_type == "DPO微调模型":
+            if model_type == "Gold DPO微调模型":
                 # 1) 优先：加载已合并权重的 DPO 模型（完全本地，不访问 HuggingFace/ModelScope）
                 merged_path = LOCAL_DPO_MERGED_DIR
                 if os.path.isdir(merged_path):
@@ -447,7 +447,7 @@ def load_model(model_type):
                         )
                         model = FastLanguageModel.for_inference(model)
                         _log(f"DPO 合并模型加载成功: {merged_path}")
-                        st.success(f"✅ DPO 合并模型加载成功：{merged_path}")
+                        st.success(f"✅ Gold DPO 合并模型加载成功：{merged_path}")
                         return model, tokenizer, "hf"
                     except Exception as e:
                         _log(f"DPO 合并模型加载失败: {e}")
@@ -458,10 +458,10 @@ def load_model(model_type):
                 if not os.path.isdir(lora_path):
                     _log(f"DPO LoRA 目录不存在: {lora_path}")
                     st.error(
-                        "❌ 未找到 DPO 模型目录：\n"
+                        "❌ 未找到 Gold DPO 模型目录：\n"
                         f"- 合并目录：{merged_path}\n"
                         f"- LoRA 目录：{lora_path}\n\n"
-                        "请先在项目根目录运行 `python train_dpo.py` 完成 DPO 训练。"
+                        "请先运行 `python train_dpo.py` 完成 Gold DPO 训练（数据：data_conv/data/gold_train_dpo.jsonl）。"
                     )
                     return None, None, None
                 _log(f"尝试加载 DPO LoRA 模型目录: {lora_path}")
@@ -474,7 +474,7 @@ def load_model(model_type):
                     )
                     model = FastLanguageModel.for_inference(model)
                     _log(f"DPO LoRA 模型加载成功: {lora_path}")
-                    st.success(f"✅ DPO LoRA 微调模型加载成功：{lora_path}")
+                    st.success(f"✅ Gold DPO LoRA 微调模型加载成功：{lora_path}")
                     return model, tokenizer, "hf"
                 except Exception as e:
                     _log(f"DPO LoRA 模型加载失败: {e}")
@@ -485,7 +485,7 @@ def load_model(model_type):
             _log("加载基础模型（HuggingFace）...")
             try:
                 from unsloth import FastLanguageModel
-                model_name = "Qwen/Qwen2-2B-Instruct"  # 分支 feat/qwen2-2b-base
+                model_name = "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"
                 model, tokenizer = FastLanguageModel.from_pretrained(
                     model_name=model_name,
                     max_seq_length=max_seq_length,
@@ -594,7 +594,7 @@ with st.sidebar:
             "选择模型",
             EMOTION_MODELS,
             key="emotion_model_choice",
-            help="Gold SFT 微调（merged_model）/ DPO / 基础模型。",
+            help="Gold SFT（merged_model）/ Gold DPO（gold 数据 chosen vs rejected）/ 基础模型。",
         )
         st.caption(f"📌 **{st.session_state.load_status}**")
         if model_choice == "基础模型":
@@ -608,11 +608,11 @@ with st.sidebar:
                 f"{'✅' if _gold_exists else '❌'} Gold SFT 模型 "
                 f"{'已就绪（merged_model 或 GGUF）' if _gold_exists else '未找到，请先运行 python train.py'}"
             )
-        elif model_choice == "DPO微调模型":
+        elif model_choice == "Gold DPO微调模型":
             _dpo_exists = os.path.isdir(LOCAL_DPO_MERGED_DIR) or os.path.isdir(LOCAL_DPO_LORA_DIR)
             st.caption(
-                f"{'✅' if _dpo_exists else '❌'} DPO 目录 "
-                f"{'已就绪' if _dpo_exists else '未找到，请先运行 train_dpo.py'}"
+                f"{'✅' if _dpo_exists else '❌'} Gold DPO 模型 "
+                f"{'已就绪（merged_model_dpo）' if _dpo_exists else '未找到，请先运行 python train_dpo.py（使用 gold 数据）'}"
             )
         if st.button("🔄 预加载模型", use_container_width=True, type="primary", key="btn_preload_emotion"):
             _log(f"预加载情感模型: {model_choice}")
@@ -1040,7 +1040,7 @@ if user_input:
 st.markdown("---")
 st.markdown("""
 <div style='text-align: center'>
-    <small>🚀 驱动模型: Qwen2 2B Instruct（分支 feat/qwen2-2b-base）</small>
+    <small>🚀 驱动模型: DeepSeek-R1-Distill-Qwen 7B</small>
     <br>
     <small>⚡ 框架: Unsloth + Streamlit</small>
 </div>
