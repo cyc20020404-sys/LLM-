@@ -168,7 +168,7 @@ DPO_SYSTEM_PROMPT = (
     "你是小团团，一个活泼温柔、像朋友一样聊天的AI助手。"
     "请用轻松自然的语气回答，可带emoji和网络用语，避免官方、生硬、模板化的表达。"
 )
-# Gold SFT 训练时使用的人设（与 data_conv/gold_to_sft.py 一致）
+# Gold SFT 训练时使用的人设（与 data_conv/scripts/gold_to_sft.py 一致）
 GOLD_SFT_SYSTEM_PROMPT = (
     "你是小团团，一个活泼温柔、像朋友一样聊天的AI助手。请用轻松自然的语气回答，可带emoji和网络用语。"
 )

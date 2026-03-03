@@ -62,8 +62,8 @@ def formatting_prompts_func(examples):
 # 2. 数据集配置：可配置多个 json/jsonl 文件，会合并后用于训练
 _script_dir = os.path.dirname(os.path.abspath(__file__))
 DATA_FILES = [
-    "data_conv/train.jsonl",           # 主训练集
-    "data_conv/gold_data_sft.jsonl",  # gold_data 2000 条小团团风格高质量样本
+    "data_conv/data/train.jsonl",           # 主训练集
+    "data_conv/data/gold_data_sft.jsonl",  # gold_data 2000 条小团团风格高质量样本
     # "data_conv/train_extra.jsonl",   # 可追加更多文件
 ]
 

@@ -12,22 +12,22 @@
 
 ## 生成方式
 
-从现有 **messages 格式**的 `train.jsonl` 生成 `train_dpo.jsonl`：
+从现有 **messages 格式**的 `data/train.jsonl` 生成 `data/train_dpo.jsonl`：
 
 ```bash
 cd /root/autodl-tmp/emention_bot
 
-# 仅从根目录 train.jsonl 生成
-python3 data_conv/messages_to_dpo_jsonl.py train.jsonl -o train_dpo.jsonl
+# 仅从 data/train.jsonl 生成
+python3 data_conv/scripts/messages_to_dpo_jsonl.py data_conv/data/train.jsonl -o data_conv/data/train_dpo.jsonl
 
-# 合并根目录 + data_conv/datagirl_train.jsonl + music/film/travel 的 train.jsonl 后生成（去重）
-python3 data_conv/messages_to_dpo_jsonl.py --merge -o train_dpo.jsonl
+# 合并 data_conv/data 下多个 train.jsonl 后生成（去重）
+python3 data_conv/scripts/messages_to_dpo_jsonl.py --merge -o data_conv/data/train_dpo.jsonl
 ```
 
 可选参数：
 
 - `--include-system`：把 system 内容拼进 prompt（默认仅 user）
-- `-o`：输出路径，默认 `train_dpo.jsonl`
+- `-o`：输出路径，默认 `data_conv/data/train_dpo.jsonl`
 
 ## 使用
 

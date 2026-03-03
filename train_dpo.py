@@ -5,7 +5,7 @@ os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "0"
 
 # 若 HuggingFace 无法访问或下载超时，则强制走 ModelScope
 # 需要先在终端安装：pip install modelscope
-os.environ["UNSLOTH_USE_MODELSCOPE"] = "1"111
+os.environ["UNSLOTH_USE_MODELSCOPE"] = "1"
 
 # 若下载/训练太慢，可先在终端开启加速再运行本脚本：
 #   source /etc/network_turbo && export HF_ENDPOINT=https://hf-mirror.com
@@ -53,7 +53,8 @@ model = FastLanguageModel.get_peft_model(
 )
 
 # ── 4. 加载 DPO 数据集 ──────────────────────────────────────────
-DPO_DATA_FILE = os.path.join("data_conv", "train_dpo.jsonl")
+# 可选：train_dpo.jsonl（原始）或 gold_train_dpo.jsonl（gold 数据转 DPO，约 2000 条）
+DPO_DATA_FILE = os.path.join("data_conv", "data", "gold_train_dpo.jsonl")
 
 _data_path = os.path.join(_script_dir, DPO_DATA_FILE)
 if not os.path.isfile(_data_path):

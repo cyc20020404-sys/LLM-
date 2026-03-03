@@ -5,7 +5,6 @@
 """
 import json
 import os
-from dataclasses import dataclass
 
 # 使用 transformers + 国内镜像
 os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
@@ -97,7 +96,7 @@ def main():
 
     training_args = TrainingArguments(
         output_dir=OUTPUT_DIR,
-        num_train_epochs=3,  # 可改为 5+ 以提升鲁棒性
+        num_train_epochs=3,
         per_device_train_batch_size=32,
         per_device_eval_batch_size=32,
         learning_rate=2e-5,
